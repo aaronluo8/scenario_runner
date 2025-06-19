@@ -462,7 +462,7 @@ class ScenarioRunner(object):
         Run conventional scenarios (e.g. implemented using the Python API of ScenarioRunner)
         """
         result = False
-
+        #print('SCENARIO', self._args.scenario,'CONFIG FILE',self._args.configFile)
         # Load the scenario configurations provided in the config file
         scenario_configurations = ScenarioConfigurationParser.parse_scenario_configuration(
             self._args.scenario,
