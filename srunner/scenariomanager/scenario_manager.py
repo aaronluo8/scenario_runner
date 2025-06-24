@@ -134,6 +134,9 @@ class ScenarioManager(object):
                     timestamp = snapshot.timestamp
             if timestamp:
                 self._tick_scenario(timestamp)
+            
+
+
 
         self.cleanup()
 

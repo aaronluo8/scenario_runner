@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<scenarios>
+    <scenario name="SimpleDrive_1" type="SimpleDrive" town="Town10HD_Opt">
+        <ego_vehicle x="-50" y="23" z="0" yaw="180" model="vehicle.tesla.model3" rolename="hero"/>
+    </scenario>
+</scenarios>
