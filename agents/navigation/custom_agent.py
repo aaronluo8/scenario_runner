@@ -203,8 +203,7 @@ class CustomAgent(BehaviorAgent):
             # bb_transform = carla.Transform(v.get_transform().transform(bb_loc), bb_rot)
             if v.id != self._vehicle.id:
                 color = carla.Color(0, 0, 255) if v.id in visible_ids else carla.Color(255, 255, 255)
-                draw_bbox(v, color)
-
+                draw_bbox(v, color)        
 
     def display_map_graph_debug(self):
         graph = self.get_global_planner()._graph
