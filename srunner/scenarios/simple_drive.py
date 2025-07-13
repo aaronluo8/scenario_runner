@@ -11,6 +11,7 @@ import json
 import networkx as nx
 
 from src.data_interface import DataInterface
+from src.scenarios import CustomScenarioManager
 from srunner.scenarios.basic_scenario import BasicScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from agents.navigation.custom_agent import CustomAgent
@@ -35,6 +36,7 @@ class SimpleDrive(BasicScenario):
         random.seed(42)
                 
         self.data_interface = DataInterface(interface_type='sender')  # Initialize the data interface
+        self.custom_scenario_manager = CustomScenarioManager(world.get_map().get_spawn_points())
 
         super().__init__(
             name="SimpleDrive",
@@ -47,7 +49,8 @@ class SimpleDrive(BasicScenario):
         # self._agent: BehaviorAgent = None
         # self._destination = None
 
-        #Move ego vehicle to a random spawn point
+        if self.debug_mode:
+            self._display_spawn_points()
 
         #Set random destination for ego vehicle
         # self.display_map_graph()
@@ -120,7 +123,10 @@ class SimpleDrive(BasicScenario):
         return {'topology' : paths}
     
     def _initialize_actors(self, config):
-        self._ego_start_location = self._ego_random_spawn()
+        #Only right turn route available for now
+        self._ego_start_location, self._destination = self.custom_scenario_manager.select_route(route_type = 'forward')
+        self._set_ego_location(self._ego_start_location)
+        #self._ego_start_location = self._ego_random_spawn()
 
         ego = CarlaDataProvider.get_hero_actor()
         self._vehicle = ego
@@ -132,30 +138,32 @@ class SimpleDrive(BasicScenario):
         print('START LOCATION:', self._ego_start_location, \
               'CURRENT EGO LOCATION:', self._agent._vehicle.get_location())
         
-        self._destination = self._set_random_ego_destination()
+        # self._destination = self._set_random_ego_destination()
 
         #Clear the waypoints queue and set a new destination
         self._agent.set_destination(self._destination.location, start_location = self._ego_start_location)
 
 
         #Spawn NPC Actors
-        spawn_points = self.world.get_map().get_spawn_points()
-        spawn_points.remove(self._ego_start_location)
-        random_transforms = random.sample(spawn_points,10)
-        for transform in random_transforms:
-            # transform = random.choice(spawn_points,)
-            npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
-            try:
-                npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
-                                                                rolename = "npc", autopilot = True)
-                                                                # random_location = True)
-            except Exception as e:
-                continue
-            self.other_actors.append(npc_actor)
+        # spawn_points = self.world.get_map().get_spawn_points()
+        # spawn_points.remove(self._ego_start_location)
+        # random_transforms = random.sample(spawn_points,10)
+        # for transform in random_transforms:
+        #     # transform = random.choice(spawn_points,)
+        #     npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
+        #     try:
+        #         npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
+        #                                                         rolename = "npc", autopilot = True)
+        #                                                         # random_location = True)
+        #     except Exception as e:
+        #         continue
+        #     self.other_actors.append(npc_actor)
             # npc = self.world.try_spawn_actor(bp, transform)
             # if npc:
             #     npc.set_autopilot(True)
             #     self.  
+
+        print('Finished initializing actors')
         
     def _create_behavior(self):
         # root = py_trees.composites.Parallel(
@@ -195,6 +203,7 @@ class SimpleDrive(BasicScenario):
         # for actor in self.other_actors:
         #     root.add_child(ActorDestroy(actor))
         py_trees.display.print_ascii_tree(root)
+        print("Created behavior tree for SimpleDrive scenario")
         return root
 
 
@@ -218,6 +227,26 @@ class SimpleDrive(BasicScenario):
     def _setup_scenario_trigger(self, config):
         return None
     
+    def _set_ego_location(self, location):
+        '''
+        Sets the ego vehicle to a specific location
+        '''
+        if not self.ego_vehicles:
+            raise ValueError("No ego vehicles available to set location.")
+        
+        if isinstance(location, carla.Transform):
+            self.ego_vehicles[0].set_transform(location)
+        elif isinstance(location, carla.Location):
+            transform = carla.Transform(location)
+            self.ego_vehicles[0].set_transform(transform)
+        else:
+            raise TypeError("Location must be a carla.Transform or carla.Location.")
+        
+        # Tick world once to allow physics to update. DOES NOT WORK IN ASYNCHRONOUS MODE.
+        # You would likely need to either run on synchronous mode temporarily or use time.sleep
+        # instead 
+        self.world.tick()
+
     def _ego_random_spawn(self):
         '''
         Relocates the ego vehicle to a new position randomly chosen from a set of spawn points.
@@ -252,6 +281,15 @@ class SimpleDrive(BasicScenario):
         spec_tf = carla.Transform(carla.Location(x_coord,y_coord,z_coord), 
                                   carla.Rotation(pitch = -90, yaw = 0))
         spectator.set_transform(spec_tf)
+    
+    def _display_spawn_points(self):
+        '''
+        Displays the spawn points on the map
+        '''
+        spawn_points = self.world.get_map().get_spawn_points()
+        for i, spawn in enumerate(spawn_points):
+            self.world.debug.draw_string(spawn.location, text = str(i), draw_shadow=False, color=carla.Color(255, 0, 0), life_time=60.0, persistent_lines=True)
+            self.world.debug.draw_point(spawn.location, size=0.1, color=carla.Color(255, 0, 0), life_time=60.0, persistent_lines=True)
 
     def __del__(self):
         """
@@ -316,9 +354,9 @@ class DriveWithAgent(py_trees.behaviour.Behaviour):
     def update(self):
         try:
             # Update ego and npc vehicle locations
-            output = self._prepare_vehicle_information()
+            #output = self._prepare_vehicle_information()
             # Send the vehicle information to the data interface
-            curated_vehicle_list = self.data_interface.send_data(output, type = 'request')
+            #curated_vehicle_list = self.data_interface.send_data(output, type = 'request')
             control = self.agent.run_step()
             self.vehicle.apply_control(control)
             return py_trees.common.Status.RUNNING
