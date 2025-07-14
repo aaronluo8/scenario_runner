@@ -163,7 +163,29 @@ class SimpleDrive(BasicScenario):
 
 
         #Spawn NPC Actors
-        background_npc_transforms = self.scenario_manager.generate_npc_behavior()
+        actor_npc_transforms, background_npc_transforms = self.scenario_manager.generate_npc_behavior()
+        for transform_dict in actor_npc_transforms:
+            print('ACTOR NPC DICT',actor_npc_transforms)
+
+            location_dict = transform_dict['location']
+            rotation_dict = transform_dict['rotation']
+            location = carla.Location(x = location_dict['x'],
+                                      y = location_dict['y'],
+                                      z = 0.3)
+            rotation = carla.Rotation(pitch = 0,
+                                      yaw = rotation_dict['yaw'],
+                                      roll = 0)
+            transform = carla.Transform(location, rotation)
+            npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
+            try:
+                npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
+                                                                rolename = "actor", autopilot = False)
+                                                                # random_location = True)
+                print('MODEL ID:',npc_model.id)
+            except Exception as e:
+                continue
+            self.other_actors.append(npc_actor)
+
         for transform in background_npc_transforms:
             # transform = random.choice(spawn_points,)
             npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
