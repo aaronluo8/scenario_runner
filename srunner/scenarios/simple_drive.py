@@ -42,6 +42,7 @@ from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (ActorTrans
 
 from agents.navigation.local_planner import RoadOption
 
+DEBUG_LIFETIME = 300 # seconds
 class SimpleDrive(BasicScenario):
     def __init__(self, world, ego_vehicles, config, randomize=False, debug_mode=False):
         self.timeout=100000
@@ -51,7 +52,7 @@ class SimpleDrive(BasicScenario):
         self.data_interface = DataInterface(interface_type='sender')  # Initialize the data interface
         
         self.spawn_points = world.get_map().get_spawn_points()
-        self.scenario_manager = CustomScenarioManager(self.spawn_points)
+        self.scenario_manager = CustomScenarioManager()
         
         super().__init__(
             name="SimpleDrive",
@@ -142,8 +143,12 @@ class SimpleDrive(BasicScenario):
     
     def _initialize_actors(self, config):
         #Random for now
-        self._ego_start_location, self._destination = self.scenario_manager.select_route()
+        self._ego_start_location_dict, self._destination_dict = self.scenario_manager.select_route()
+        self._ego_start_location = self._dict_to_transform(self._ego_start_location_dict)
+        self._destination = self._dict_to_transform(self._destination_dict)
+        
         self._set_ego_location(self._ego_start_location)
+
         # self._ego_start_location = self._ego_random_spawn()
 
         ego = CarlaDataProvider.get_hero_actor()
@@ -152,55 +157,34 @@ class SimpleDrive(BasicScenario):
             self._agent = CustomAgent(ego, behavior="normal")
         else:
             self._agent._vehicle = ego  # Update the agent's vehicle reference
-
-        print('START LOCATION:', self._ego_start_location, \
-              'CURRENT EGO LOCATION:', self._agent._vehicle.get_location())
-        
-        # self._destination = self._set_random_ego_destination()
-
+       
         #Clear the waypoints queue and set a new destination
         self._agent.set_destination(self._destination.location, start_location = self._ego_start_location)
 
-
         #Spawn NPC Actors
-        actor_npc_transforms, background_npc_transforms = self.scenario_manager.generate_npc_behavior()
-        for transform_dict in actor_npc_transforms:
-            print('ACTOR NPC DICT',actor_npc_transforms)
-
-            location_dict = transform_dict['location']
-            rotation_dict = transform_dict['rotation']
-            location = carla.Location(x = location_dict['x'],
-                                      y = location_dict['y'],
-                                      z = 0.3)
-            rotation = carla.Rotation(pitch = 0,
-                                      yaw = rotation_dict['yaw'],
-                                      roll = 0)
-            transform = carla.Transform(location, rotation)
-            npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
+        npc_params_list = self.scenario_manager.generate_npc_behavior()
+        for npc_params in npc_params_list:
+            #Get NPC spawn transform
+            transform_dict = npc_params['spawn']
+            transform = self._dict_to_transform(transform_dict)
+            
+            #Spawn NPC
+            blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
+            type_exclude = npc_params.get('type_exclude', [])
+            filtered_blueprint_library = [bp for bp in blueprint_library \
+                        if bp.has_attribute('base_type') and bp.get_attribute('base_type').as_str().lower() not in type_exclude]
+            npc_model = random.choice(filtered_blueprint_library)
+            print("BLUEPRINT", type(npc_model), npc_model.get_attribute('base_type').as_str())
             try:
+                rolename = npc_params.get('rolename', 'npc')
+                use_autopilot = True if npc_params['behavior']['controller'] == 'autopilot' else False
                 npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
-                                                                rolename = "actor", autopilot = False)
+                                                                rolename = rolename, autopilot = use_autopilot)
                                                                 # random_location = True)
                 print('MODEL ID:',npc_model.id)
             except Exception as e:
                 continue
             self.other_actors.append(npc_actor)
-
-        for transform in background_npc_transforms:
-            # transform = random.choice(spawn_points,)
-            npc_model = random.choice(self.world.get_blueprint_library().filter("vehicle.*"))
-            try:
-                npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
-                                                                rolename = "npc", autopilot = True)
-                                                                # random_location = True)
-                print('MODEL ID:',npc_model.id)
-            except Exception as e:
-                continue
-            self.other_actors.append(npc_actor)
-            # npc = self.world.try_spawn_actor(bp, transform)
-            # if npc:
-            #     npc.set_autopilot(True)
-            #     self.  
         
     def _create_behavior(self):
         # root = py_trees.composites.Parallel(
@@ -228,6 +212,7 @@ class SimpleDrive(BasicScenario):
         episode_sequence.add_child(DriveWithAgent(self._agent, self.data_interface))
         episode_sequence.add_child(CheckArrival(self._vehicle, self._agent.get_destination))
         episode_sequence.add_child(TimeOut(timeout = 180, name="TimeOut"))
+        #Add something here to check collision as well
 
         reset_node = ResetScenarioNode(self)
 
@@ -263,10 +248,25 @@ class SimpleDrive(BasicScenario):
     def _setup_scenario_trigger(self, config):
         return None
     
+    def _dict_to_transform(self, transform_dict):
+        '''
+        Converts a dictionary with keys 'location' and 'rotation' to a carla.Transform object
+        '''
+        location_dict = transform_dict['location']
+        rotation_dict = transform_dict['rotation']
+        location = carla.Location(**location_dict)
+        rotation = carla.Rotation(**rotation_dict)
+        return carla.Transform(location, rotation)
+    
     def _set_ego_location(self, transform):
         '''
         Sets the ego vehicle to a specific spawn point
         '''
+        if isinstance(transform, dict):
+            transform = self._dict_to_transform(transform)
+        elif not isinstance(transform, carla.Transform):
+            raise TypeError("Transform must be a dictionary or carla.Transform object")
+        
         self.ego_vehicles[0].set_transform(transform)
 
         # Tick world once to allow physics to update. DOES NOT WORK IN ASYNCHRONOUS MODE.
@@ -306,7 +306,7 @@ class SimpleDrive(BasicScenario):
         spectator = self.world.get_spectator()
         x_coord, y_coord, z_coord = -45, 23, 70
         spec_tf = carla.Transform(carla.Location(x_coord,y_coord,z_coord), 
-                                  carla.Rotation(pitch = -90, yaw = 0))
+                                  carla.Rotation(pitch = -90, yaw = -90))
         spectator.set_transform(spec_tf)
 
     def display_spawn_ids(self):
@@ -321,7 +321,7 @@ class SimpleDrive(BasicScenario):
                 wp.location,
                 size=0.1,
                 color=carla.Color(255, 0, 0),  # red for occupied waypoints
-                life_time=300,
+                life_time=DEBUG_LIFETIME,
                 persistent_lines=False
             )
             self.world.debug.draw_string(
@@ -329,7 +329,7 @@ class SimpleDrive(BasicScenario):
                 text = str(i),
                 draw_shadow=False, 
                 color=carla.Color(255,0,0), 
-                life_time=300, 
+                life_time=DEBUG_LIFETIME, 
                 persistent_lines=False
             )
             
@@ -346,7 +346,7 @@ class SimpleDrive(BasicScenario):
             for y in range(-max_coord, max_coord + 1, grid_size):
                 location = carla.Location(x = x, y = y, z = default_z)
                 self.world.debug.draw_string(location, f'({x},{y})',
-                                        life_time = 30.0, 
+                                        life_time = DEBUG_LIFETIME, 
                                         color = carla.Color(0, 255, 0))
         
         arrow_len = 15.0
@@ -368,9 +368,9 @@ class SimpleDrive(BasicScenario):
                                     z = default_z)
             self.world.debug.draw_arrow(origin, target, 
                                         thickness = 0.1, arrow_size = 0.3,
-                                        color = color, life_time = 30.0)
+                                        color = color, life_time = DEBUG_LIFETIME)
             self.world.debug.draw_string(target, str(deg), 
-                                         color = color, life_time = 30.0)
+                                         color = color, life_time = DEBUG_LIFETIME)
 
 
 
