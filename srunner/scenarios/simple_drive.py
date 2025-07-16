@@ -30,6 +30,7 @@ from src.scenarios import CustomScenarioManager
 from srunner.scenarios.basic_scenario import BasicScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from agents.navigation.custom_agent import CustomAgent
+from agents.navigation.global_route_planner import GlobalRoutePlanner
 from srunner.scenariomanager.scenarioatomics.atomic_criteria import CollisionTest
 from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import InTimeToArrivalToLocation
 from srunner.scenariomanager.timer import TimeOut
@@ -54,6 +55,8 @@ class SimpleDrive(BasicScenario):
         self.spawn_points = world.get_map().get_spawn_points()
         self.scenario_manager = CustomScenarioManager()
         
+        self.global_route_planner = GlobalRoutePlanner(wmap = world.get_map(), 
+                                                      sampling_resolution=2.0)
         super().__init__(
             name="SimpleDrive",
             ego_vehicles=ego_vehicles,
@@ -63,6 +66,8 @@ class SimpleDrive(BasicScenario):
             criteria_enable=True,
         )
 
+
+    
         # self._agent: BehaviorAgent = None
         # self._destination = None
 
@@ -162,7 +167,12 @@ class SimpleDrive(BasicScenario):
         self._agent.set_destination(self._destination.location, start_location = self._ego_start_location)
 
         #Spawn NPC Actors
+        self._npc_actor_configs = [] #Keep track of actors and specified behaviors
         npc_params_list = self.scenario_manager.generate_npc_behavior()
+        
+        if not hasattr(self, '_npc_actor_controller'):
+            self._npc_actor_controller = NPCActorsController(self.global_route_planner, behavior_list = [])
+
         for npc_params in npc_params_list:
             #Get NPC spawn transform
             transform_dict = npc_params['spawn']
@@ -174,18 +184,29 @@ class SimpleDrive(BasicScenario):
             filtered_blueprint_library = [bp for bp in blueprint_library \
                         if bp.has_attribute('base_type') and bp.get_attribute('base_type').as_str().lower() not in type_exclude]
             npc_model = random.choice(filtered_blueprint_library)
-            print("BLUEPRINT", type(npc_model), npc_model.get_attribute('base_type').as_str())
             try:
                 rolename = npc_params.get('rolename', 'npc')
-                use_autopilot = True if npc_params['behavior']['controller'] == 'autopilot' else False
+                controller_type = npc_params['behavior']['controller']
+                use_autopilot = True if controller_type == 'autopilot' else False
                 npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
                                                                 rolename = rolename, autopilot = use_autopilot)
                                                                 # random_location = True)
-                print('MODEL ID:',npc_model.id)
+                if controller_type == 'bt' and npc_actor is not None:
+                    npc_params['behavior']['route']['start'] = carla.Location(**npc_params['behavior']['route']['start'])
+                    npc_params['behavior']['route']['end'] = carla.Location(**npc_params['behavior']['route']['end'])
+                    cfg = {
+                        'actor' : npc_actor,
+                        'behavior': npc_params['behavior']
+                    }
+                    self._npc_actor_configs.append(cfg)
+                    
             except Exception as e:
                 continue
             self.other_actors.append(npc_actor)
-        
+
+        #Initialize the NPC controller with the generated behaviors
+        if self._npc_actor_configs:
+            self._npc_actor_controller.update_behavior_list(self._npc_actor_configs)
     def _create_behavior(self):
         # root = py_trees.composites.Parallel(
         #     "DriveLoop",
@@ -214,6 +235,8 @@ class SimpleDrive(BasicScenario):
         episode_sequence.add_child(TimeOut(timeout = 180, name="TimeOut"))
         #Add something here to check collision as well
 
+        episode_sequence.add_child(self._npc_actor_controller)
+
         reset_node = ResetScenarioNode(self)
 
         loop = py_trees.composites.Sequence('LoopEpisode')
@@ -221,11 +244,10 @@ class SimpleDrive(BasicScenario):
         loop.add_child(reset_node)
         
         root.add_child(loop)
-        #root.add_child(DriveWithAgent(self._agent))
-        # for actor in self.other_actors:
-        #     root.add_child(ActorDestroy(actor))
+
         py_trees.display.print_ascii_tree(root)
         return root
+
 
 
     def _create_test_criteria(self):
@@ -233,14 +255,6 @@ class SimpleDrive(BasicScenario):
         collision_criterion = CollisionTest(self.ego_vehicles[0])
 
         criteria.append(collision_criterion)
-
-        # ego = self.ego_vehicles[0]
-        # destination = self._destination.location  # should be a carla.Location
-
-        # time_limit = 90  # seconds
-        # criteria.append(
-        #     InTimeToArrivalToLocation(ego, time_limit, destination)
-        # )
 
         return criteria
 
@@ -274,33 +288,6 @@ class SimpleDrive(BasicScenario):
         # instead 
         self.world.tick()
     
-    # def _ego_random_spawn(self):
-    #     '''
-    #     Relocates the ego vehicle to a new position randomly chosen from a set of spawn points.
-    #     Assumes only one ego vehicle
-    #     '''
-    #     ego_spawn_inds = [80,81,91,94,0,1,137,79,50,49,52,51,139,138,110,89,102,99]
-        
-    #     spawn_points = self.world.get_map().get_spawn_points()
-    #     new_spawn = spawn_points[random.choice(ego_spawn_inds)]
-
-    #     # self.ego_vehicles = []
-    #     self.ego_vehicles[0].set_transform(new_spawn)
-
-    #     # Tick world once to allow physics to update. DOES NOT WORK IN ASYNCHRONOUS MODE.
-    #     # You would likely need to either run on synchronous mode temporarily or use time.sleep
-    #     # instead 
-    #     self.world.tick()
-
-    #     return new_spawn
-    
-    # def _set_random_ego_destination(self):
-    #     ego_dest_inds = [2,3,77,96,111,115,67,95,27,26,68,122,53,55,56,57]
-    #     spawn_points = self.world.get_map().get_spawn_points()
-    #     destination = spawn_points[random.choice(ego_dest_inds)]
-
-    #     return destination
-
     def _set_spectator_camera(self):
         # position spectator overhead
         spectator = self.world.get_spectator()
@@ -448,7 +435,46 @@ class DriveWithAgent(py_trees.behaviour.Behaviour):
             print(f"Error in DriveWithAgent: {e}")
             traceback.print_exc(0)
             raise
-    
+
+class NPCActorsController(py_trees.behaviour.Behaviour):
+    '''
+    Controls the NPC actors in the scenario
+    '''
+    def __init__(self, global_route_planner, behavior_list = []):
+        super().__init__(f"ControlNPCActors")
+        self.behavior_list = behavior_list
+        self.global_route_planner = global_route_planner
+
+    def tick(self):
+        # process them all first
+        for behavior in self.behavior_list:
+            for node in behavior.tick():
+                yield node
+        # new_status = Status.SUCCESS if self.policy == common.ParallelPolicy.SUCCESS_ON_ALL else Status.RUNNING
+        new_status = py_trees.common.Status.RUNNING
+        self.status = new_status
+        yield self
+
+    def update_behavior_list(self, npc_actor_configs):
+        behavior_list = []
+        for cfg in npc_actor_configs:
+            npc_actor = cfg['actor']
+            behavior = cfg['behavior']
+            start = behavior['route']['start']
+            end = behavior['route']['end']
+            route = self.global_route_planner.trace_route(start, end)
+            behavior = WaypointFollower(
+                actor = npc_actor,
+                plan = route,
+                target_speed = behavior.get('target_speed', 20.0),  # Default target speed
+                name = f'NPC_{npc_actor.id}_FollowWaypoints',
+                avoid_collision = False,
+            )
+            behavior_list.append(behavior)
+
+        self.behavior_list = behavior_list
+            
+
 class ResetScenarioNode(py_trees.behaviour.Behaviour):
     '''
     Node to reset the scenario
@@ -477,6 +503,7 @@ class ResetScenarioNode(py_trees.behaviour.Behaviour):
         self.scenario._initialize_actors(self.scenario.config)
         return py_trees.common.Status.SUCCESS
     
+
 class CheckArrival(py_trees.behaviour.Behaviour):
     '''
     Checks if the goal has been reached

@@ -61,10 +61,10 @@ class VehiclePIDController():
             :param waypoint: target location encoded as a waypoint
             :return: distance (in meters) to the waypoint
         """
-
         acceleration = self._lon_controller.run_step(target_speed)
         current_steering = self._lat_controller.run_step(waypoint)
         control = carla.VehicleControl()
+        # print('ACCELERATION', acceleration)
         if acceleration >= 0.0:
             control.throttle = min(acceleration, self.max_throt)
             control.brake = 0.0
@@ -72,6 +72,7 @@ class VehiclePIDController():
             control.throttle = 0.0
             control.brake = min(abs(acceleration), self.max_brake)
 
+        # print('THROTTLE', control.throttle)
         # Steering regulation: changes cannot happen abruptly, can't steer too much.
 
         if current_steering > self.past_steering + 0.1:

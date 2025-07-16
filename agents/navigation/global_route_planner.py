@@ -43,9 +43,6 @@ class GlobalRoutePlanner(object):
         This method returns list of (carla.Waypoint, RoadOption)
         from origin to destination
         """
-        print('TRACING ROUTE FROM {} TO {}'.format(
-            origin, destination))
-        
         route_trace = []
         route = self._path_search(origin, destination)
         print('ROUTE TRACE: {}'.format(route), type(route[0]))
