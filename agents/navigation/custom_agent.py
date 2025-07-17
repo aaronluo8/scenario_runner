@@ -19,6 +19,9 @@ class CustomAgent(BehaviorAgent):
         self._visible_vehicle_list = None
         self._occupied_edges = []
 
+        #Expose this at some point, maybe to opt_dict
+        self.max_wp_distance_to_npc = 3.0
+
         
     def set_destination(self, end_location, start_location=None):
         """
@@ -414,7 +417,7 @@ class CustomAgent(BehaviorAgent):
         occupied_waypoints = []
         for waypoint in self._local_planner.get_plan():
             for vehicle in self._visible_vehicle_list:
-                if waypoint[0].transform.location.distance(vehicle.get_location()) < 5.0:
+                if waypoint[0].transform.location.distance(vehicle.get_location()) < self.max_wp_distance_to_npc:
                     occupied_waypoints.append(waypoint[0])
         return occupied_waypoints
     

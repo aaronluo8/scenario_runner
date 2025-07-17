@@ -26,7 +26,8 @@ else:
     print("Error: PROJECT_ROOT environment variable is not set.")
 
 from src.data_interface import DataInterface
-from src.scenarios import CustomScenarioManager
+from src.scenarios.scenario_manager import CustomScenarioManager
+
 from srunner.scenarios.basic_scenario import BasicScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from agents.navigation.custom_agent import CustomAgent
@@ -48,6 +49,10 @@ class SimpleDrive(BasicScenario):
     def __init__(self, world, ego_vehicles, config, randomize=False, debug_mode=False):
         self.timeout=100000
         random.seed(42)
+
+        self.n_loops = 10 # Expose this at some point
+        self.num_parked = 5
+        self.num_background = 10
                 
         print('Debug Mode:', debug_mode)
         self.data_interface = DataInterface(interface_type='sender')  # Initialize the data interface
@@ -101,8 +106,6 @@ class SimpleDrive(BasicScenario):
         #self.send_data(graph_json)  # Send the graph topology to the receiver
         # print('TOPOLOGY:',self._agent._global_planner._topology[0])
         # print('WMAP:', self._agent._global_planner._wmap)
-        
-
 
     def get_graph_topology(self):     
         
@@ -147,14 +150,23 @@ class SimpleDrive(BasicScenario):
         return {'topology' : paths}
     
     def _initialize_actors(self, config):
-        #Random for now
-        self._ego_start_location_dict, self._destination_dict = self.scenario_manager.select_route()
+        #Base for now
+        scenario_type = 'base'
+        ego_route, npc_params_list, _ = self.scenario_manager.generate_scenario(
+            scenario_type = scenario_type,
+            num_parked = self.num_parked,
+            num_background = self.num_background)
+        
+        self._ego_start_location_dict, self._destination_dict = ego_route 
         self._ego_start_location = self._dict_to_transform(self._ego_start_location_dict)
         self._destination = self._dict_to_transform(self._destination_dict)
         
-        self._set_ego_location(self._ego_start_location)
+        blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
+        
+        # ego_spawn_points = scenario._get_all_ego_spawn_points()
+        # self.validate_ego_spawn_points(ego_spawn_points)
 
-        # self._ego_start_location = self._ego_random_spawn()
+        self._set_ego_location(self._ego_start_location)
 
         ego = CarlaDataProvider.get_hero_actor()
         self._vehicle = ego
@@ -168,7 +180,6 @@ class SimpleDrive(BasicScenario):
 
         #Spawn NPC Actors
         self._npc_actor_configs = [] #Keep track of actors and specified behaviors
-        npc_params_list = self.scenario_manager.generate_npc_behavior()
         
         if not hasattr(self, '_npc_actor_controller'):
             self._npc_actor_controller = NPCActorsController(self.global_route_planner, behavior_list = [])
@@ -179,7 +190,6 @@ class SimpleDrive(BasicScenario):
             transform = self._dict_to_transform(transform_dict)
             
             #Spawn NPC
-            blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
             type_exclude = npc_params.get('type_exclude', [])
             filtered_blueprint_library = [bp for bp in blueprint_library \
                         if bp.has_attribute('base_type') and bp.get_attribute('base_type').as_str().lower() not in type_exclude]
@@ -207,6 +217,7 @@ class SimpleDrive(BasicScenario):
         #Initialize the NPC controller with the generated behaviors
         if self._npc_actor_configs:
             self._npc_actor_controller.update_behavior_list(self._npc_actor_configs)
+    
     def _create_behavior(self):
         # root = py_trees.composites.Parallel(
         #     "DriveLoop",
@@ -216,7 +227,7 @@ class SimpleDrive(BasicScenario):
         root = LoopBehavior(
             "DriveLoop", 
             policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE, 
-            n_loops=10,
+            n_loops=self.n_loops,
             criteria = criteria,
             data_interface = self.data_interface
         )
@@ -359,8 +370,23 @@ class SimpleDrive(BasicScenario):
             self.world.debug.draw_string(target, str(deg), 
                                          color = color, life_time = DEBUG_LIFETIME)
 
+    def validate_ego_spawn_points(self,spawn_points):
+        '''
+        Validates the spawn points of the map
+        '''
+        blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
 
-
+        for spawn in spawn_points:
+            if isinstance(spawn, dict):
+                spawn = self._dict_to_transform(spawn)
+            elif not isinstance(spawn, carla.Transform):
+                raise TypeError("Spawn point must be a dictionary or carla.Transform object")
+            
+            npc_model = random.choice(blueprint_library)
+            npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, spawn, 
+                                                        rolename = 'npc', autopilot = False)
+            print('Spawning NPC Actor at:', spawn.location)
+        
 
     def __del__(self):
         """
