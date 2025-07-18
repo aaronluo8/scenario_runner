@@ -70,9 +70,7 @@ class SimpleDrive(BasicScenario):
             debug_mode=debug_mode,
             criteria_enable=True,
         )
-
-
-    
+   
         # self._agent: BehaviorAgent = None
         # self._destination = None
 
@@ -161,6 +159,13 @@ class SimpleDrive(BasicScenario):
         self._ego_start_location = self._dict_to_transform(self._ego_start_location_dict)
         self._destination = self._dict_to_transform(self._destination_dict)
         
+        #Publish the ego start location and destination to the data interface
+        # self.data_interface.send_data({
+        #     'ego_start_location': self._ego_start_location_dict,
+        #     'destination': self._destination_dict
+        # }, type = 'send')
+    
+
         blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
         
         # ego_spawn_points = scenario._get_all_ego_spawn_points()
