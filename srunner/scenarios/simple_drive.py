@@ -20,11 +20,14 @@ if project_root:
     print(f"Project root is: {project_root}")
     # Use the project root to construct paths
     src_path = os.path.join(project_root, 'src')
-    print(f"Adding {src_path} to sys.path")
-    sys.path.append(src_path)
+    if src_path not in sys.path:
+        # Add the src directory to the system path
+        print(f"Adding {src_path} to sys.path")
+        sys.path.append(src_path)
 else:
     print("Error: PROJECT_ROOT environment variable is not set.")
 
+print(sys.path)
 from src.data_interface import DataInterface
 from src.scenarios.scenario_manager import CustomScenarioManager
 
@@ -51,8 +54,8 @@ class SimpleDrive(BasicScenario):
         random.seed(42)
 
         self.n_loops = 10 # Expose this at some point
-        self.num_parked = 5
-        self.num_background = 10
+        self.num_parked = 0
+        self.num_background = 0
                 
         print('Debug Mode:', debug_mode)
         self.data_interface = DataInterface(interface_type='sender')  # Initialize the data interface
@@ -160,10 +163,10 @@ class SimpleDrive(BasicScenario):
         self._destination = self._dict_to_transform(self._destination_dict)
         
         #Publish the ego start location and destination to the data interface
-        # self.data_interface.send_data({
-        #     'ego_start_location': self._ego_start_location_dict,
-        #     'destination': self._destination_dict
-        # }, type = 'send')
+        self.data_interface.send_data({
+            'ego_start_location': self._ego_start_location_dict,
+            'destination': self._destination_dict
+        }, type = 'send')
     
 
         blueprint_library = self.world.get_blueprint_library().filter("vehicle.*")
