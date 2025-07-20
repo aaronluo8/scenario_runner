@@ -455,6 +455,30 @@ class DriveWithAgent(py_trees.behaviour.Behaviour):
             'actors': actor_list
         }
         return vehicle_info
+    
+    # Modify this function later, used to translate 
+    # Autoware Ackermann messages to CARLA VehicleControl
+    def ackermann_to_carla_control(ackermann_msg):
+        MAX_STEERING_ANGLE = 0.6
+        steer_rad = ackermann_msg.lateral.steering_tire_angle
+        acceleration = ackermann_msg.longitudinal.acceleration
+
+        control = carla.VehicleControl()
+        
+        # Steer: scale from [-MAX_STEERING, MAX_STEERING] to [-1.0, 1.0]
+        control.steer = max(min(steer_rad / MAX_STEERING_ANGLE, 1.0), -1.0)
+
+        # Determine throttle/brake
+        if acceleration > 0:
+            control.throttle = max(min(acceleration / 3.0, 1.0), 0.0)  # assume 3.0 m/s² max accel
+            control.brake = 0.0
+        else:
+            control.brake = max(min(-acceleration / 3.0, 1.0), 0.0)  # same for decel
+            control.throttle = 0.0
+
+        control.hand_brake = False
+        control.manual_gear_shift = False
+        return control
 
     def update(self):
         try:
@@ -463,6 +487,7 @@ class DriveWithAgent(py_trees.behaviour.Behaviour):
             # # Send the vehicle information to the data interface
             # curated_vehicle_list = self.data_interface.send_data(output, type = 'request')
             control = self.agent.run_step()
+            print('CONTROL:', control)
             self.vehicle.apply_control(control)
             return py_trees.common.Status.RUNNING
         except Exception as e:
