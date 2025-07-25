@@ -86,13 +86,9 @@ class CustomAgent(BehaviorAgent):
                 return self.emergency_stop()
 
         # 2.2: Car following behaviors
-        all_vehicle_list = self._world.get_actors().filter("*vehicle*")
-
-        #TODO: Vehicle List is directly from cache
-
 
         #if debug
-        self.draw_vehicle_filter_debug(all_vehicle_list)
+        self.draw_vehicle_filter_debug(self._visible_vehicle_list)
         self.draw_behavior_agent_route_debug()
         self.display_map_graph_debug()
 
@@ -244,15 +240,6 @@ class CustomAgent(BehaviorAgent):
             return
 
         life_time = 0.1
-        # Draw full global plan in cyan
-        # for wp, _ in getattr(self, "_global_plan", []):
-        #     self._world.debug.draw_point(
-        #         wp.transform.location,
-        #         size=0.05,
-        #         color=carla.Color(0, 255, 255),  # cyan
-        #         life_time=life_time,
-        #         persistent_lines=False
-        #     )
 
         # Draw local buffer in green
         plan = self._local_planner.get_plan()
@@ -275,15 +262,6 @@ class CustomAgent(BehaviorAgent):
                     persistent_lines=False
                 )
         
-        # Label the start and destination points
-        # self.world.debug.draw_string(
-        #     self._ego_start_location.location,
-        #     text='Start',
-        #     draw_shadow=False,
-        #     color=carla.Color(r=255, g=0, b=0),
-        #     life_time=life_time       # seconds
-        #     persistent_lines=True
-        # )
         if len(plan) > 0:
             self._world.debug.draw_point(
                 #self._destination.location,
@@ -375,7 +353,7 @@ class CustomAgent(BehaviorAgent):
         
         if new_visible_vehicles is None:
             all_vehicle_list = self._world.get_actors().filter("*vehicle*")
-            self._visible_vehicle_list = all_vehicle_list#[
+            self._visible_vehicle_list = list(all_vehicle_list)#[
             #    v for v in all_vehicle_list 
             #    if v.get_location().distance(self._vehicle.get_location()) < 45 and v.id != self._vehicle.id
             #]

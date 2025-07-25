@@ -27,22 +27,29 @@ if project_root:
 else:
     print("Error: PROJECT_ROOT environment variable is not set.")
 
-print(sys.path)
 from src.data_interface import DataInterface
+from src.filters.filter_interface import FilterInterface
 from src.scenarios.scenario_manager import CustomScenarioManager
+from src.behaviors.drive_agent import DriveWithAgent
+from src.behaviors.npc_controller import NPCActorsController
+from src.behaviors.reset_scenario import ResetScenarioNode
+from src.behaviors.loop_behavior import LoopBehavior
+from src.behaviors.check_arrival import CheckArrival
+from src.behaviors.location_timer import ArriveToLocationOnTime
 
 from srunner.scenarios.basic_scenario import BasicScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from agents.navigation.custom_agent import CustomAgent
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 from srunner.scenariomanager.scenarioatomics.atomic_criteria import CollisionTest
-from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import InTimeToArrivalToLocation
 from srunner.scenariomanager.timer import TimeOut
-from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (ActorTransformSetter,
-                                                                      ActorDestroy,
-                                                                      KeepVelocity,
-                                                                      StopVehicle,
-                                                                      WaypointFollower)
+# from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (ActorTransformSetter,
+#                                                                       ActorDestroy,
+#                                                                       KeepVelocity,
+#                                                                       StopVehicle,
+#                                                                       WaypointFollower)
+
+
 
 
 from agents.navigation.local_planner import RoadOption
@@ -50,12 +57,27 @@ from agents.navigation.local_planner import RoadOption
 DEBUG_LIFETIME = 300 # seconds
 class SimpleDrive(BasicScenario):
     def __init__(self, world, ego_vehicles, config, randomize=False, debug_mode=False):
+
+        # ========== GET THESE VARIABLES FROM CONFIG IN THE FUTURE ========== #
         self.timeout=100000
         random.seed(42)
 
-        self.n_loops = 10 # Expose this at some point
-        self.num_parked = 0
-        self.num_background = 0
+        self.n_loops = 1 # Expose this at some point
+        self.num_parked = 10
+        self.num_background = 10
+        self.max_scenario_time = 90
+        self.get_detection_area = True
+
+        # self.filter_params = {
+        #     'threshold': 45.0,
+        # }
+        self.filter_params = {
+            'logging_rate': 10,
+            'egocentric': True,
+        }
+        self.filter_type = 'data_collector'  # Use 'data_collector' for collecting data without filtering
+
+        # ========== END OF CONFIG VARIABLES ========== #
                 
         print('Debug Mode:', debug_mode)
         self.data_interface = DataInterface(interface_type='sender')  # Initialize the data interface
@@ -73,40 +95,16 @@ class SimpleDrive(BasicScenario):
             debug_mode=debug_mode,
             criteria_enable=True,
         )
-   
-        # self._agent: BehaviorAgent = None
-        # self._destination = None
 
-        #Move ego vehicle to a random spawn point
-
-        #Set random destination for ego vehicle
-        # self.display_map_graph()
         self._set_spectator_camera()
+        self.display_detection_area()
         if debug_mode:
             self.display_spawn_ids()
             self.display_grid()
 
-        # for ind in range(5):
-        #     topology_edge = self._agent.get_global_planner()._topology[ind]
-        #     print('TOPOLOGY {ind}')
-            
-        #     print(f'ENTRY IDS -> ID: {topology_edge["entry"].id}, ROAD ID: {topology_edge["entry"].road_id}, LANE ID: {topology_edge["entry"].lane_id}')
-        #     print(f'EXIT IDS -> ID: {topology_edge["exit"].id}, ROAD ID: {topology_edge["exit"].road_id}, LANE ID: {topology_edge["exit"].lane_id}')
-        #     for waypoint in topology_edge['path']:
-        #         print(f'WAYPOINT: {waypoint.id}, ROAD ID: {waypoint.road_id}, LANE ID: {waypoint.lane_id}')
-
-        # print(f'ID MAP {self._agent.get_global_planner()._id_map}')
-        # print(f'ROAD ID TO EDGE MAP {self._agent.get_global_planner()._road_id_to_edge}') 
-
-        # graph_json = self.get_graph_topology()
         topology_json = self.get_topology()
-        # self.data_interface.send_data(graph_json)  # Send the graph topology to the receiver
         self.data_interface.send_data(topology_json)
 
-        #graph_json = self.get_graph_topology()
-        #self.send_data(graph_json)  # Send the graph topology to the receiver
-        # print('TOPOLOGY:',self._agent._global_planner._topology[0])
-        # print('WMAP:', self._agent._global_planner._wmap)
 
     def get_graph_topology(self):     
         
@@ -153,7 +151,8 @@ class SimpleDrive(BasicScenario):
     def _initialize_actors(self, config):
         #Base for now
         scenario_type = 'base'
-        ego_route, npc_params_list, _ = self.scenario_manager.generate_scenario(
+        ego_route, npc_params_list, detection_area, _ = self.scenario_manager.generate_scenario(
+            get_detection_area = self.get_detection_area,
             scenario_type = scenario_type,
             num_parked = self.num_parked,
             num_background = self.num_background)
@@ -161,6 +160,12 @@ class SimpleDrive(BasicScenario):
         self._ego_start_location_dict, self._destination_dict = ego_route 
         self._ego_start_location = self._dict_to_transform(self._ego_start_location_dict)
         self._destination = self._dict_to_transform(self._destination_dict)
+
+        self._detection_area = detection_area
+
+        if not hasattr(self, 'filter_interface'):
+            self.filter_params['detection_area'] = self._detection_area
+            self.filter_interface = FilterInterface(filter_type=self.filter_type, filter_params=self.filter_params)
         
         #Publish the ego start location and destination to the data interface
         self.data_interface.send_data({
@@ -203,11 +208,12 @@ class SimpleDrive(BasicScenario):
                         if bp.has_attribute('base_type') and bp.get_attribute('base_type').as_str().lower() not in type_exclude]
             npc_model = random.choice(filtered_blueprint_library)
             try:
-                rolename = npc_params.get('rolename', 'npc')
+                rolename = npc_params['role']
                 controller_type = npc_params['behavior']['controller']
                 use_autopilot = True if controller_type == 'autopilot' else False
                 npc_actor = CarlaDataProvider.request_new_actor(npc_model.id, transform, 
                                                                 rolename = rolename, autopilot = use_autopilot)
+                # print('SPAWNED NPC ACTOR:', npc_actor, 'ROLENAME:', npc_actor.attributes['role_name'])
                                                                 # random_location = True)
                 if controller_type == 'bt' and npc_actor is not None:
                     npc_params['behavior']['route']['start'] = carla.Location(**npc_params['behavior']['route']['start'])
@@ -237,7 +243,7 @@ class SimpleDrive(BasicScenario):
             policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE, 
             n_loops=self.n_loops,
             criteria = criteria,
-            data_interface = self.data_interface
+            filter_interface = self.filter_interface
         )
 
         # timer_node = ArriveToLocationOnTime(
@@ -249,9 +255,9 @@ class SimpleDrive(BasicScenario):
             "OneEpisode",
             policy = py_trees.common.ParallelPolicy.SUCCESS_ON_ONE
         )
-        episode_sequence.add_child(DriveWithAgent(self._agent, self.data_interface))
+        episode_sequence.add_child(DriveWithAgent(self._agent, self.filter_interface))
         episode_sequence.add_child(CheckArrival(self._vehicle, self._agent.get_destination))
-        episode_sequence.add_child(TimeOut(timeout = 180, name="TimeOut"))
+        episode_sequence.add_child(TimeOut(timeout = self.max_scenario_time, name="TimeOut"))
         #Add something here to check collision as well
 
         episode_sequence.add_child(self._npc_actor_controller)
@@ -266,8 +272,6 @@ class SimpleDrive(BasicScenario):
 
         py_trees.display.print_ascii_tree(root)
         return root
-
-
 
     def _create_test_criteria(self):
         criteria = []
@@ -378,6 +382,29 @@ class SimpleDrive(BasicScenario):
             self.world.debug.draw_string(target, str(deg), 
                                          color = color, life_time = DEBUG_LIFETIME)
 
+    def display_detection_area(self):
+        x_top, y_top = self._detection_area['top_left']['x'], self._detection_area['top_left']['y']
+        x_bot, y_bot = self._detection_area['bottom_right']['x'], self._detection_area['bottom_right']['y']
+        z_default = 0.3
+        corners = [
+            carla.Location(*(x_top, y_top, z_default)),
+            carla.Location(*(x_top, y_bot, z_default)),
+            carla.Location(*(x_bot, y_bot, z_default)),
+            carla.Location(*(x_bot, y_top, z_default)),
+            carla.Location(*(x_top, y_top, z_default))
+            # Closing the rectangle by returning to the first corner
+        ]
+
+        for i in range(len(corners) - 1):
+            self.world.debug.draw_line(
+                corners[i],
+                corners[i+1],
+                thickness=0.5,
+                color=carla.Color(0, 255, 0),
+                life_time=0
+            )
+
+
     def validate_ego_spawn_points(self,spawn_points):
         '''
         Validates the spawn points of the map
@@ -401,252 +428,4 @@ class SimpleDrive(BasicScenario):
         Remove all actors upon deletion
         """
         self.remove_all_actors()
-
-
-class DriveWithAgent(py_trees.behaviour.Behaviour):
-    '''
-    Hook for the custom control agent
-    '''
-    def __init__(self, agent: CustomAgent, data_interface: DataInterface):
-        super().__init__("DriveWithAgent")
-        self.agent = agent
-        self.vehicle = agent._vehicle
-        self.world = self.vehicle.get_world()
-        self.data_interface = data_interface  # Data interface for sending data
-
-    def _prepare_vehicle_information(self):
-        '''
-        Prepares the vehicle information to be sent to the data interface
-        '''
-        ego_location = self.vehicle.get_transform().location
-        ego_x, ego_y, ego_z = ego_location.x, ego_location.y, ego_location.z
-
-        actor_list = []
-        for actor in self.world.get_actors().filter("*vehicle*"):
-            if actor.id != self.vehicle.id:
-                actor_transform = actor.get_transform()
-                actor_location = actor_transform.location
-                actor_x, actor_y, actor_z = actor_location.x, actor_location.y, actor_location.z
-                actor_info = {
-                    'id': actor.id,
-                    'location': [actor_x, actor_y, actor_z],
-                    'rotation': [actor_transform.rotation.pitch,
-                                 actor_transform.rotation.yaw,
-                                 actor_transform.rotation.roll],
-                    # 'velocity': actor.get_velocity(),
-                    # 'acceleration': actor.get_acceleration(),
-                    # 'angular_velocity': actor.get_angular_velocity(),
-                }
-                actor_list.append(actor_info)
-        ego_info = {
-            'location': [ego_x, ego_y, ego_z],
-            'rotation': [
-                self.vehicle.get_transform().rotation.roll,
-                self.vehicle.get_transform().rotation.pitch,
-                self.vehicle.get_transform().rotation.yaw
-                ],
-            # 'velocity': self.vehicle.get_velocity(),
-            # 'acceleration': self.vehicle.get_acceleration(),
-            # 'angular_velocity': self.vehicle.get_angular_velocity(),
-        }
-
-        vehicle_info = {
-            'ego': ego_info,
-            'actors': actor_list
-        }
-        return vehicle_info
-    
-    # Modify this function later, used to translate 
-    # Autoware Ackermann messages to CARLA VehicleControl
-    def ackermann_to_carla_control(ackermann_msg):
-        MAX_STEERING_ANGLE = 0.6
-        steer_rad = ackermann_msg.lateral.steering_tire_angle
-        acceleration = ackermann_msg.longitudinal.acceleration
-
-        control = carla.VehicleControl()
-        
-        # Steer: scale from [-MAX_STEERING, MAX_STEERING] to [-1.0, 1.0]
-        control.steer = max(min(steer_rad / MAX_STEERING_ANGLE, 1.0), -1.0)
-
-        # Determine throttle/brake
-        if acceleration > 0:
-            control.throttle = max(min(acceleration / 3.0, 1.0), 0.0)  # assume 3.0 m/s² max accel
-            control.brake = 0.0
-        else:
-            control.brake = max(min(-acceleration / 3.0, 1.0), 0.0)  # same for decel
-            control.throttle = 0.0
-
-        control.hand_brake = False
-        control.manual_gear_shift = False
-        return control
-
-    def update(self):
-        try:
-            # Update ego and npc vehicle locations
-            # output = self._prepare_vehicle_information()
-            # # Send the vehicle information to the data interface
-            # curated_vehicle_list = self.data_interface.send_data(output, type = 'request')
-            control = self.agent.run_step()
-            print('CONTROL:', control)
-            self.vehicle.apply_control(control)
-            return py_trees.common.Status.RUNNING
-        except Exception as e:
-            print(f"Error in DriveWithAgent: {e}")
-            traceback.print_exc(0)
-            raise
-
-class NPCActorsController(py_trees.behaviour.Behaviour):
-    '''
-    Controls the NPC actors in the scenario
-    '''
-    def __init__(self, global_route_planner, behavior_list = []):
-        super().__init__(f"ControlNPCActors")
-        self.behavior_list = behavior_list
-        self.global_route_planner = global_route_planner
-
-    def tick(self):
-        # process them all first
-        for behavior in self.behavior_list:
-            for node in behavior.tick():
-                yield node
-        # new_status = Status.SUCCESS if self.policy == common.ParallelPolicy.SUCCESS_ON_ALL else Status.RUNNING
-        new_status = py_trees.common.Status.RUNNING
-        self.status = new_status
-        yield self
-
-    def update_behavior_list(self, npc_actor_configs):
-        behavior_list = []
-        for cfg in npc_actor_configs:
-            npc_actor = cfg['actor']
-            behavior = cfg['behavior']
-            start = behavior['route']['start']
-            end = behavior['route']['end']
-            route = self.global_route_planner.trace_route(start, end)
-            behavior = WaypointFollower(
-                actor = npc_actor,
-                plan = route,
-                target_speed = behavior.get('target_speed', 20.0),  # Default target speed
-                name = f'NPC_{npc_actor.id}_FollowWaypoints',
-                avoid_collision = False,
-            )
-            behavior_list.append(behavior)
-
-        self.behavior_list = behavior_list
-            
-
-class ResetScenarioNode(py_trees.behaviour.Behaviour):
-    '''
-    Node to reset the scenario
-    '''
-    def __init__(self, scenario):
-        super().__init__("ResetScenario")
-        self.scenario = scenario
-
-    def update(self):
-        print("Resetting scenario...")
-        ego = self.scenario.ego_vehicles[0]
-
-        # # Pick new random destination
-        # self.scenario._start_location = self.scenario._ego_random_spawn()
-        # self.scenario._destination = self.scenario._set_random_ego_destination()
-
-        # # Move vehicle and reset planner
-        # ego.set_transform(self.scenario._start_location)
-        ego.set_target_velocity(carla.Vector3D(0, 0, 0))  # Stop the vehicle
-        ego.set_target_angular_velocity(carla.Vector3D(0, 0, 0))  # Stop any rotation
-        # ego.apply_control(carla.VehicleControl()) 
-
-        # self.scenario._agent.set_destination(self.scenario._destination.location)
-        
-        self.scenario.remove_all_actors()
-        self.scenario._initialize_actors(self.scenario.config)
-        return py_trees.common.Status.SUCCESS
-    
-
-class CheckArrival(py_trees.behaviour.Behaviour):
-    '''
-    Checks if the goal has been reached
-    '''
-    def __init__(self, vehicle, get_destination, threshold=5.0):
-        super().__init__("CheckArrival")
-        self.vehicle = vehicle
-        self.get_destination = get_destination #Function to retrieve the current destination
-        self.threshold = threshold
-
-    def update(self):
-        destination = self.get_destination()
-        dist = self.vehicle.get_location().distance(destination)
-        # print(f"Distance to destination: {dist:.2f} m")
-        if dist < self.threshold:
-            return py_trees.common.Status.SUCCESS
-        return py_trees.common.Status.RUNNING
-    
-class ArriveToLocationOnTime(py_trees.behaviour.Behaviour):
-    def __init__(self, vehicle, destination, time_limit=60):
-        super().__init__("ArriveToLocationOnTime")
-        self.vehicle = vehicle
-        self.destination = destination
-        self.time_limit = time_limit
-        self.start_time = time.time()
-        self.behavior_function = InTimeToArrivalToLocation(
-            self.vehicle, self.time_limit, self.destination
-        )
-        # print("INITIALIZED ARRIVE TO LOCATION ON TIME")
-    def update(self):
-        new_status = self.behavior_function.update()
-        return new_status
-
-class LoopBehavior(py_trees.composites.Parallel):
-    '''
-    Loop behavior for repeating the driving sequence
-    '''
-    def __init__(self, name="CustomLoopParallel", policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE, \
-                 children=None, n_loops=3, criteria = None, data_interface=None):
-        super().__init__(name=name, policy=policy, children=children)
-        self.n_loops = n_loops
-        self.current_loop = 0
-
-        self.start_time = time.time()
-        self.criteria = criteria  # List of criteria to evaluate
-        self.data_interface = data_interface  # Data interface for sending data
-        # print('HELLO IN LOOP')
-
-    def tick(self):
-        # Call the original Parallel tick
-        # print('HELLO IN LOOP:',self.current_loop, self.status)
-        for node in super().tick():
-            # print('TICKING NODE:', node.name, 'Status:', node.status)
-            yield node
-        # print('--END OF TICK--')
-
-        # Custom logic after children have been ticked
-        if self.status == py_trees.common.Status.SUCCESS:
-            results = {}
-            if self.criteria is not None:
-                for crit in self.criteria:
-                    # Assumes each criterion exposes its actual_value, adjust as needed
-                    crit_name = crit.name
-                    results[crit_name] = crit.actual_value
-                    
-                    #Reset actual value for next loop
-                    crit.actual_value = 0
-
-            # Add loop-specific information
-            results["current_loop"] = self.current_loop
-            results["elapsed_time"] = time.time() - self.start_time
-            # Send the results through the data interface, if provided
-            print(results)
-            if self.data_interface is not None:
-                self.data_interface.send_data(results, type="send")
-
-            self.start_time = time.time()
-
-            self.current_loop += 1
-            if self.current_loop < self.n_loops:
-                # Reset children for next loop
-                for child in self.children:
-                    child.stop(py_trees.common.Status.INVALID)
-                self.status = py_trees.common.Status.RUNNING
-            else:
-                self.status = py_trees.common.Status.SUCCESS
-        yield self
+  
