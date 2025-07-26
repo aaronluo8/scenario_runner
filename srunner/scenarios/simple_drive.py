@@ -62,7 +62,7 @@ class SimpleDrive(BasicScenario):
         self.timeout=100000
         random.seed(42)
 
-        self.n_loops = 1 # Expose this at some point
+        self.n_loops = 10 # Expose this at some point
         self.num_parked = 10
         self.num_background = 10
         self.max_scenario_time = 90
@@ -72,10 +72,10 @@ class SimpleDrive(BasicScenario):
         #     'threshold': 45.0,
         # }
         self.filter_params = {
-            'logging_rate': 10,
-            'egocentric': True,
+            'model_path': 'saved_models/random_forest/traffic_actor_classifier_0.joblib',
+            'egocentric' : True
         }
-        self.filter_type = 'data_collector'  # Use 'data_collector' for collecting data without filtering
+        self.filter_type = 'binary_classifier'  # Use 'data_collector' for collecting data without filtering
 
         # ========== END OF CONFIG VARIABLES ========== #
                 
