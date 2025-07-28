@@ -11,13 +11,14 @@ from .custom_planner import CustomPlanner
 
 
 class CustomAgent(BehaviorAgent):
-    def __init__(self, vehicle, opt_dict = {}, **kwargs):
+    def __init__(self, vehicle, opt_dict = {}, reveal_actors=False, **kwargs):
         super().__init__(vehicle, **kwargs)
 
         print('CustomAgent initialized with options:', opt_dict)
         self._local_planner = CustomPlanner(self._vehicle, opt_dict=opt_dict, map_inst=self._map)
         self._visible_vehicle_list = None
         self._occupied_edges = []
+        self._reveal_actors = reveal_actors
 
         #Expose this at some point, maybe to opt_dict
         self.max_wp_distance_to_npc = 3.0
@@ -202,6 +203,8 @@ class CustomAgent(BehaviorAgent):
             # bb_transform = carla.Transform(v.get_transform().transform(bb_loc), bb_rot)
             if v.id != self._vehicle.id:
                 color = carla.Color(0, 0, 255) if v.id in visible_ids else carla.Color(255, 255, 255)
+                if self._reveal_actors and v.role == 'actor':
+                    color = carla.Color(255, 0, 0)
                 draw_bbox(v, color)        
 
     def display_map_graph_debug(self):

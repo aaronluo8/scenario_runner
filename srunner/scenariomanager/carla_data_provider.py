@@ -1088,6 +1088,7 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
         Remove an actor from the pool using its ID
         """
         if actor_id in CarlaDataProvider._carla_actor_pool:
+            # print(f"Removing actor id {actor_id}, {CarlaDataProvider._carla_actor_pool[actor_id]}")
             was_destroyed = CarlaDataProvider._carla_actor_pool[actor_id].destroy()
             CarlaDataProvider._carla_actor_pool[actor_id] = None  # type: ignore
             CarlaDataProvider._carla_actor_pool.pop(actor_id)
